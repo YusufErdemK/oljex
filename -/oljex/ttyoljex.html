@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OlJex TTY</title>
+  <style>
+    :root {
+      --bg: #000;
+      --text: #ffffff;
+      --prompt: #007AFF;
+      /* mavi prompt */
+      --muted: #9aa0a6;
+      --accent: #00aaff;
+    }
+
+    html,
+    body {
+      height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* terminal wrapper */
+    #terminal {
+      box-sizing: border-box;
+      padding: 18px;
+      height: 100vh;
+      overflow: auto;
+      /* allow programmatic scroll; scrollbar hidden via css below */
+    }
+
+    /* hide scrollbars but still allow scroll programmatically */
+    ::-webkit-scrollbar {
+      width: 0;
+      height: 0;
+    }
+
+    #terminal {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    /* lines */
+    .line {
+      margin: 4px 0;
+    }
+
+    /* first-line of prompt (info line) */
+    .prompt-line1 {
+      color: var(--prompt);
+      display: block;
+      white-space: pre;
+      margin-bottom: 2px;
+    }
+
+    /* second-line: symbol + input on same row */
+    .prompt-line2 {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .prompt-symbol {
+      color: var(--prompt);
+      white-space: pre;
+      flex-shrink: 0;
+    }
+
+    /* actual input */
+    .cmd-input {
+      background: transparent;
+      border: 0;
+      outline: 0;
+      color: var(--text);
+      font-family: inherit;
+      font-size: inherit;
+      width: 100%;
+      caret-color: var(--prompt);
+    }
+
+    .cmd-input::placeholder {
+      color: #666;
+    }
+
+    pre.output {
+      margin: 0 0 6px 0;
+      white-space: pre-wrap;
+      color: var(--text);
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .panic {
+      color: #ff4d4f;
+      font-weight: 700;
+      white-space: pre-wrap;
+    }
+
+    /* nano modal */
+    #editorModal {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 80vw;
+      height: 70vh;
+      background: #0b0b0b;
+      border: 1px solid #222;
+      box-shadow: 0 10px 50px rgba(0, 0, 0, 0.8);
+      padding: 12px;
+      display: none;
+      flex-direction: column;
+      z-index: 9999;
+    }
+
+    #editorModal textarea {
+      flex: 1;
+      background: #000;
+      color: var(--text);
+      border: 0;
+      outline: 0;
+      resize: none;
+      font-family: inherit;
+      padding: 8px;
+    }
+
+    #editorActions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      justify-content: flex-end;
+    }
+
+    .btn {
+      background: #111;
+      color: var(--text);
+      border: 1px solid #222;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+
+    .btn.primary {
+      border-color: var(--accent);
+      color: var(--prompt);
+    }
+
+    /* keep selection visible on black */
+    ::selection {
+      background: #003f5c;
+      color: #fff;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="terminal" role="region" aria-label="OlJex Terminal"></div>
+
+  <!-- simple editor modal for nano -->
+  <div id="editorModal" aria-hidden="true">
+    <div style="color:var(--prompt); margin-bottom:8px;">-- NANO (OlJex) -- <span id="editorFile"
+        style="color:var(--text);"></span></div>
+    <textarea id="editorArea" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+    <div id="editorActions">
+      <button class="btn" id="editorCancel">Cancel</button>
+      <button class="btn primary" id="editorSave">Save</button>
+    </div>
+  </div>
+
+  <script>
+    /*
+      ttyoljex.html - self-contained terminal.
+      - prompt is blue, text white
+      - autocomplete/spellcheck disabled
+      - supports: ls, pwd, cd, mkdir, touch, tree, pencifetch, useradd, su, passwd, nano, clear, help
+      - filesystem is in-memory and rooted at "-" (we'll represent as rootObj)
+    */
+
+    (function () {
+
+      /* ---------- initial fake disk layout (only '-' namespace) ---------- */
+      const rootObj = {
+        "apps": { "tty.js": "// placeholder" },
+        "boot": { "oljex-kernel.js": "// kernel", "oloader": { "boot.html": "//", "oloader.conf.js": "//" } },
+        "oljex": { "fonts": {}, "icons": {}, "skel": {}, "ttyoljex.html": "(this file)" },
+        "temp": {},
+        "users": { "oljex": {} }
+      };
+
+      /* users map */
+      const users = {
+        "oljex": { password: "", home: "-/users/oljex" },
+        "root": { password: "", home: "-/users/oljex" }
+      };
+
+      /* Terminal state */
+      let currentUser = "oljex";
+      let currentPath = "-/users/oljex"; // working path (string)
+      const rootName = "-";
+
+      /* DOM refs */
+      const term = document.getElementById('terminal');
+      const editorModal = document.getElementById('editorModal');
+      const editorArea = document.getElementById('editorArea');
+      const editorFile = document.getElementById('editorFile');
+      const editorCancel = document.getElementById('editorCancel');
+      const editorSave = document.getElementById('editorSave');
+
+      /* helpers */
+      function normalizePath(p) {
+        if (!p) return currentPath;
+        p = String(p).trim();
+        if (p === "~") return users[currentUser].home;
+        if (p.startsWith("-")) return p; // absolute in our fake root notation
+        if (p.startsWith("/")) {
+          // treat / as inside "-" root: "/apps" -> "-/apps"
+          const rest = p === "/" ? "" : p.replace(/^\//, '');
+          return rest ? `-/${rest}` : `-`;
+        }
+        // relative
+        if (currentPath === `-`) return `-/${p}`;
+        return `${currentPath}/${p}`;
+      }
+
+      function getNode(path) {
+        // path like "-/a/b" or "-" root
+        if (!path) return null;
+        const parts = path.split('/').filter(Boolean);
+        // first part may be '-' rootName
+        if (parts[0] === rootName) parts.shift();
+        let node = rootObj;
+        for (const part of parts) {
+          if (node && typeof node === 'object' && part in node) node = node[part];
+          else return null;
+        }
+        return node;
+      }
+
+      function ensureDir(path) {
+        // create path directories if not exist (used by mkdir)
+        const parts = path.split('/').filter(Boolean);
+        if (parts[0] === rootName) parts.shift();
+        let node = rootObj;
+        for (const p of parts) {
+          if (!(p in node)) node[p] = {};
+          node = node[p];
+          if (typeof node !== 'object') return false;
+        }
+        return true;
+      }
+
+      function pathToDisplay(path) {
+        const home = users[currentUser].home;
+        if (path === home) return "~";
+        // show relative under rootName, remove leading "-/" for nicer display
+        if (path === `-`) return "/";
+        if (path.startsWith(`-`)) {
+          const rest = path.replace(/^-\/?/, '');
+          return "/" + rest;
+        }
+        return path;
+      }
+
+      /* printing helpers */
+      function appendOutput(text, className) {
+        if (!text && text !== 0) return;
+        const pre = document.createElement('pre');
+        pre.className = 'output' + (className ? ' ' + className : '');
+        pre.textContent = text;
+        term.appendChild(pre);
+        scrollToBottom();
+      }
+
+      function appendRawNode(node) {
+        // if node is object show keys, if string show content
+        if (node === null || node === undefined) return appendOutput('', 'muted');
+        if (typeof node === 'string') return appendOutput(node);
+        if (typeof node === 'object') {
+          const keys = Object.keys(node).filter(k => k !== 'node_modules');
+          appendOutput(keys.join('  '));
+        }
+      }
+
+      function scrollToBottom() {
+        term.scrollTop = term.scrollHeight;
+      }
+
+      /* prompt building */
+      function renderPrompt() {
+        // create prompt block with two visual lines, input on second line
+        const wrapper = document.createElement('div');
+        wrapper.className = 'line';
+
+        const line1 = document.createElement('div');
+        line1.className = 'prompt-line1';
+        line1.textContent = `┌──(${currentUser}@oljex)-[${pathToDisplay(currentPath)}]`;
+        wrapper.appendChild(line1);
+
+        const line2 = document.createElement('div');
+        line2.className = 'prompt-line2';
+        const symbol = document.createElement('span');
+        symbol.className = 'prompt-symbol';
+        symbol.textContent = '└─$ ';
+        line2.appendChild(symbol);
+
+        const input = document.createElement('input');
+        input.className = 'cmd-input';
+        input.setAttribute('autocomplete', 'off');
+        input.setAttribute('autocorrect', 'off');
+        input.setAttribute('autocapitalize', 'off');
+        input.setAttribute('spellcheck', 'false');
+        input.setAttribute('placeholder', '');
+        input.autofocus = true;
+
+        // accessibility
+        input.setAttribute('aria-label', 'OlJex komut satırı');
+
+        line2.appendChild(input);
+        wrapper.appendChild(line2);
+        term.appendChild(wrapper);
+        input.focus();
+
+        // handle Enter
+        input.addEventListener('keydown', async (ev) => {
+          if (ev.key === 'Enter') {
+            ev.preventDefault();
+            const cmd = input.value.trim();
+            // echo the command (convert input to static text)
+            const echoSpan = document.createElement('span');
+            echoSpan.textContent = cmd;
+            // replace input with text node (so it doesn't remain editable)
+            line2.replaceChild(echoSpan, input);
+            // run cmd
+            await handleCommand(cmd);
+            // next prompt
+            renderPrompt();
+          } else if (ev.key === 'c' && ev.ctrlKey) {
+            // ctrl+c behavior: newline
+            ev.preventDefault();
+            const echo = document.createElement('span');
+            echo.textContent = '^C';
+            line2.replaceChild(echo, input);
+            appendOutput(''); // blank line
+            renderPrompt();
+          }
+        });
+
+        // prevent mobile autocomplete popups etc
+        input.addEventListener('focus', () => { input.setAttribute('autocomplete', 'off'); });
+        scrollToBottom();
+      }
+
+      /* command handlers */
+      async function handleCommand(raw) {
+        if (!raw) return;
+        const parts = raw.split(' ').filter(Boolean);
+        const cmd = parts[0];
+        const args = parts.slice(1);
+        switch (cmd) {
+          case 'help':
+            appendOutput('Available: ls pwd cd mkdir touch tree pencifetch useradd su passwd nano clear help');
+            break;
+          case 'clear':
+            term.innerHTML = '';
+            break;
+          case 'ls': {
+            const target = normalizePath(args[0] || '');
+            const node = getNode(target);
+            if (node && typeof node === 'object') {
+              const keys = Object.keys(node).filter(k => k !== 'node_modules');
+              appendOutput(keys.join('  '));
+            } else appendOutput('');
+            break;
+          }
+          case 'pwd':
+            appendOutput(pathToDisplay(currentPath));
+            break;
+          case 'cd': {
+            if (args.length === 0) {
+              currentPath = users[currentUser].home;
+            } else {
+              let dest = args[0];
+              // support cd - and .. and absolute / and - root forms
+              if (dest === '-') { /* switch to previous? not tracked */ dest = users[currentUser].home; }
+              const resolved = normalizePath(dest);
+              const node = getNode(resolved);
+              if (node && typeof node === 'object') {
+                currentPath = resolved;
+              } else {
+                appendOutput(`cd: no such file or directory: ${dest}`);
+              }
+            }
+            break;
+          }
+          case 'mkdir': {
+            if (!args[0]) { appendOutput('mkdir: missing operand'); break; }
+            const name = args[0];
+            const parent = getNode(currentPath);
+            if (!parent) { appendOutput('mkdir: current path invalid'); break; }
+            if (name in parent) { appendOutput(`mkdir: cannot create directory '${name}': File exists`); break; }
+            parent[name] = {};
+            appendOutput('');
+            break;
+          }
+          case 'touch': {
+            if (!args[0]) { appendOutput('touch: missing file operand'); break; }
+            const name = args[0];
+            const parent = getNode(currentPath);
+            if (!parent) { appendOutput('touch: current path invalid'); break; }
+            parent[name] = ""; // empty file content
+            appendOutput('');
+            break;
+          }
+          case 'tree': {
+            const start = normalizePath(args[0] || '');
+            const node = getNode(start);
+            if (!node) { appendOutput('tree: cannot access: No such file or directory'); break; }
+            const lines = [];
+            function walk(n, prefix) {
+              if (typeof n !== 'object') return;
+              const keys = Object.keys(n).filter(k => k !== 'node_modules');
+              keys.forEach((k, i) => {
+                const last = (i === keys.length - 1);
+                lines.push(prefix + (last ? '└── ' : '├── ') + k);
+                walk(n[k], prefix + (last ? '    ' : '│   '));
+              });
+            }
+            lines.push('.');
+            walk(node, '');
+            appendOutput(lines.join('\n'));
+            break;
+          }
+          case 'pencifetch': {
+            const ascii = [
+              "                                                ",
+              "               ..                         ...   ",
+              "       ',;::;;;;;;;;;,.   .              :...',.",
+              "   .cll;'......',:cooodo,,,:oxxc'        .   ..o",
+              "  ,d,.......';:c;'..;x00Oo;...;:::,'..........do",
+              "  c.  ..      .cxxo:,';dddooc;,'..........,:od; ",
+              "  .''';.               .';;;;;;;;;;;;;:cc:;,     ",
+              "                            ...........           ",
+              "                                                  ",
+            ].join('\n');
+
+            // muted class kullanıyoruz, CSS'te gri veya farklı bir renk olabilir
+            appendOutput(ascii, 'muted');
+
+            // pathToDisplay fonksiyonu: root için /, diğerleri için olduğu gibi
+            const pathToDisplay = (p) => p === "/" ? "/" : p;
+
+            const info = [
+              `User: ${currentUser}`,
+              `OS: Oljex`,
+              `Kernel: lenreK`,
+              `Path: ${pathToDisplay(currentPath)}`,
+              `Terminal: Penci TTY`
+            ];
+
+            appendOutput(info.join('\n'));
+            break;
+          }
+
+
+          case 'useradd': {
+            if (!args[0]) { appendOutput('useradd: missing username'); break; }
+            const name = args[0];
+            if (name in users) { appendOutput(`useradd: user '${name}' exists`); break; }
+            users[name] = { password: '', home: `-/users/${name}` };
+            // create home dir
+            ensureDir(`-/${'users'}/${name}`);
+            appendOutput(`User '${name}' added`);
+            break;
+          }
+          case 'passwd': {
+            const who = args[0] || currentUser;
+            if (!(who in users)) { appendOutput(`passwd: user '${who}' does not exist`); break; }
+            // simple usage: passwd newpass
+            if (args[1]) {
+              users[who].password = args[1];
+              appendOutput('Password updated');
+            } else {
+              appendOutput('Usage: passwd <user> <newpassword>  OR passwd <newpassword>');
+            }
+            break;
+          }
+          case 'su': {
+            if (!args[0]) { appendOutput('su: missing user'); break; }
+            const target = args[0].replace(/^-$/, '');
+            if (!(target in users)) { appendOutput(`su: user '${target}' does not exist`); break; }
+            currentUser = target;
+            currentPath = users[currentUser].home;
+            appendOutput(`Switched to user '${currentUser}'`);
+            break;
+          }
+          case 'nano': {
+            if (!args[0]) { appendOutput('nano: missing file'); break; }
+            const filename = args[0];
+            const filePath = normalizePath(filename);
+            // resolve parent dir
+            const parentPath = filePath.split('/').slice(0, -1).join('/');
+            const name = filePath.split('/').pop();
+            let parent = getNode(parentPath || (currentPath));
+            if (!parent) { appendOutput('nano: directory does not exist'); break; }
+            if (!(name in parent)) parent[name] = "";
+            // open modal editor
+            editorFile.textContent = ` ${pathToDisplay(filePath)} `;
+            editorArea.value = typeof parent[name] === 'string' ? parent[name] : '';
+            editorModal.style.display = 'flex';
+            editorModal.setAttribute('aria-hidden', 'false');
+            editorArea.focus();
+            // save handler closures
+            const saveHandler = () => {
+              parent[name] = editorArea.value;
+              editorModal.style.display = 'none';
+              editorModal.setAttribute('aria-hidden', 'true');
+              appendOutput(`Saved ${name}`);
+              editorSave.removeEventListener('click', saveHandler);
+              editorCancel.removeEventListener('click', cancelHandler);
+            };
+            const cancelHandler = () => {
+              editorModal.style.display = 'none';
+              editorModal.setAttribute('aria-hidden', 'true');
+              appendOutput('Edit cancelled');
+              editorSave.removeEventListener('click', saveHandler);
+              editorCancel.removeEventListener('click', cancelHandler);
+            };
+            editorSave.addEventListener('click', saveHandler);
+            editorCancel.addEventListener('click', cancelHandler);
+            break;
+          }
+          default:
+            appendOutput(`${cmd}: command not found`);
+        }
+      } // handleCommand
+
+      /* initial welcome */
+      appendOutput('OlJex TTY — type "help" for commands', 'muted');
+
+      /* render first prompt */
+      renderPrompt();
+
+      /* Expose for debugging in devtools if needed */
+      window.__OlJex = { rootObj, users, getNode, normalizePath };
+
+    })(); // IIFE
+  </script>
+</body>
+
+</html>

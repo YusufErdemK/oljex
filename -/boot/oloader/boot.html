@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>OlJex Bootloader</title>
+    <style>
+        body {
+            background: black;
+            color: #d6d6d6;
+            font-family: monospace;
+            margin: 0;
+            padding: 20px;
+            white-space: pre;
+        }
+
+        body {
+            overflow: hidden;
+            /* sayfada scroll yok */
+        }
+
+        #log {
+            overflow: hidden;
+            /* pre içinde scroll yok */
+        }
+
+        #log {
+            line-height: 1.2em;
+        }
+
+        .panic {
+            color: #ff0000;
+            font-weight: bold;
+        }
+    </style>
+</head>
+
+<body>
+    <pre id="log"></pre>
+
+    <script src="oloader.conf"></script>
+    <script src="../../boot/oljex-kernel.js"></script>
+    <script>
+        const logEl = document.getElementById("log");
+
+        function log(msg, minDelay = 5, maxDelay = 30) {
+            const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+            return new Promise(res => {
+                setTimeout(() => {
+                    logEl.textContent += msg + "\n";
+                    window.scrollTo(0, document.body.scrollHeight);
+                    res();
+                }, delay);
+            });
+        }
+
+
+        async function bootSequence() {
+            try {
+                await log("Bootloader initializing...");
+                await log("Reading oloader.conf...");
+                await log("Applying boot options...");
+
+                if (oloaderConfig.failBoot) throw new Error("Bootloader configuration error!");
+
+                await log("Loading OlJex Kernel...");
+                await log("Kernel version 0.1-alpha");
+                await log("Initializing hardware emulation...");
+                await log("Mounting filesystem...");
+
+                // Simulate logs
+                // Simulate logs
+                const logs = [
+                    "[ OK ] CPU detected: x86_64",
+                    "[ OK ] Memory test: 32GB DDR5",
+                    "[ OK ] GPU initialized: Mesa Intel Graphics",
+                    "[ OK ] Loading apps directory...",
+                    "[ OK ] Mounting /- filesystem...",
+                    "[ OK ] Users loaded: root, oljex",
+                    "[ OK ] PCI devices enumerated",
+                    "[ OK ] Network adapters initialized",
+                    "[ OK ] USB controllers configured",
+                    "[ OK ] Sound card initialized",
+                    "[ OK ] Keyboard detected",
+                    "[ OK ] Mouse detected",
+                    "[ OK ] Display adapter initialized",
+                    "[ OK ] Boot cache cleared",
+                    "[ OK ] Timezone set",
+                    "[ OK ] Locale set",
+                    "[ OK ] Input devices mapped",
+                    "[ OK ] Loading kernel modules...",
+                    "[ OK ] Module audio loaded",
+                    "[ OK ] Module usb loaded",
+                    "[ OK ] Module network loaded",
+                    "[ OK ] Module fs loaded",
+                    "[ OK ] Module graphics loaded",
+                    "[ OK ] Module apps loaded",
+                    "[ OK ] Security policies applied",
+                    "[ OK ] Firewall initialized",
+                    "[ OK ] Authentication system loaded",
+                    "[ OK ] Logging service started",
+                    "[ OK ] Scheduler initialized",
+                    "[ OK ] Timer initialized",
+                    "[ OK ] Interrupts configured",
+                    "[ OK ] System calls initialized",
+                    "[ OK ] Memory manager active",
+                    "[ OK ] Page tables built",
+                    "[ OK ] Heap initialized",
+                    "[ OK ] Stack protected",
+                    "[ OK ] CPU cores synchronized",
+                    "[ OK ] Multithreading enabled",
+                    "[ OK ] IPC initialized",
+                    "[ OK ] Virtual memory enabled",
+                    "[ OK ] Swap initialized",
+                    "[ OK ] Caches flushed",
+                    "[ OK ] Boot device detected",
+                    "[ OK ] Filesystem mounted",
+                    "[ OK ] Devices enumerated",
+                    "[ OK ] Disk scheduler active",
+                    "[ OK ] Block devices ready",
+                    "[ OK ] Network stack initialized",
+                    "[ OK ] TCP/IP ready",
+                    "[ OK ] DHCP client started",
+                    "[ OK ] DNS resolver configured",
+                    "[ OK ] Services loaded",
+                    "[ OK ] Daemons started",
+                    "[ OK ] Cron jobs loaded",
+                    "[ OK ] System ready",
+                    "[ OK ] User environment initialized",
+                    "[ OK ] Shell ready",
+                    "[ OK ] Terminal ready",
+                    "[ OK ] Fonts loaded",
+                    "[ OK ] Icons loaded",
+                    "[ OK ] UI components initialized",
+                    "[ OK ] Window manager ready",
+                    "[ OK ] Desktop environment ready",
+                    "[ OK ] Clipboard ready",
+                    "[ OK ] Input method ready",
+                    "[ OK ] Notifications ready",
+                    "[ OK ] Audio mixer ready",
+                    "[ OK ] Bluetooth ready",
+                    "[ OK ] Wi-Fi ready",
+                    "[ OK ] Ethernet ready",
+                    "[ OK ] Storage ready",
+                    "[ OK ] Backup service ready",
+                    "[ OK ] Security scan complete",
+                    "[ OK ] Logging complete",
+                    "[ OK ] Finalizing boot sequence"
+                ];
+
+
+                for (const l of logs) await log(l, 70);
+
+                // Simulate random kernel panic if oloaderConfig.triggerPanic
+                if (oloaderConfig.triggerPanic) throw new Error("Simulated kernel panic!");
+
+                await log("Boot sequence complete!");
+                // Launch kernel
+                OlJexKernel.boot();
+
+            } catch (err) {
+                logEl.innerHTML += "\n<span class='panic'>KERNEL PANIC: " + err.message + "</span>\n";
+            }
+        }
+
+        // Start boot
+        bootSequence();
+    </script>
+</body>
+
+</html>
